@@ -13,6 +13,7 @@ import {
   Modal,
   TextInput,
   Image,
+  Linking,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { Audio } from "expo-av";
@@ -43,24 +44,55 @@ export default function App() {
   const [scanned, setScanned] = useState(false);
   const [scanData, setScanData] = useState([]);
   const [isFlipped, setIsFlipped] = useState(true);
+  const [healthIssueModalVisible, setHealthIssueModalVisible] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [alertText, setAlertText] = useState("");
   const [apiDomain, setApiDomain] = useState("");
+  const [branch, setBranch] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [apiConfigModalVisible, setApiConfigModalVisible] = useState(false);
   const [apiResponseModalVisible, setApiResponseModalVisible] = useState(false);
   const [apiResponse, setApiResponse] = useState(null);
+  const [apiHealthy, setApiHealthy] = useState(null); // null khi chưa kiểm tra
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const translateYAnim = useRef(new Animated.Value(10)).current;
   const scrollViewRef = useRef(null);
 
-  // Load domain từ AsyncStorage khi khởi động
+  // Tính tổng số mã quét
+  const totalScanned = scanData.reduce((sum, item) => sum + item.count, 0);
+
+  // Load domain, branch, và apiKey từ AsyncStorage khi khởi động
   useEffect(() => {
-    const loadApiDomain = async () => {
+    const loadApiConfig = async () => {
       const savedDomain = await AsyncStorage.getItem("apiDomain");
+      const savedBranch = await AsyncStorage.getItem("branch");
+      const savedApiKey = await AsyncStorage.getItem("apiKey");
       if (savedDomain) setApiDomain(savedDomain);
+      if (savedBranch) setBranch(savedBranch);
+      if (savedApiKey) setApiKey(savedApiKey);
     };
-    loadApiDomain();
+    loadApiConfig();
   }, []);
+
+  // Kiểm tra API /health khi khởi động hoặc config thay đổi
+  useEffect(() => {
+    const checkApiHealth = async () => {
+      if (apiDomain && branch && apiKey) {
+        try {
+          const response = await axios.get(`${apiDomain}/api/health`, {
+            headers: { authorization: apiKey, branch: branch },
+          });
+          setApiHealthy(response.status === 200);
+        } catch (error) {
+          console.error("API /health failed:", error);
+          setApiHealthy(false);
+        }
+      } else {
+        setApiHealthy(false);
+      }
+    };
+    checkApiHealth();
+  }, [apiDomain, branch, apiKey]);
 
   useEffect(() => {
     if (scanData.length > 0) {
@@ -79,7 +111,7 @@ export default function App() {
 
   useEffect(() => {
     if (scrollViewRef.current) {
-      scrollViewRef.current.scrollToEnd({ animated: true });
+      scrollViewRef.current.scrollTo({ y: 0, animated: true });
     }
   }, [scanData.length]);
 
@@ -123,59 +155,81 @@ export default function App() {
     }
   };
 
+  const playHangChuY = async () => {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require("./assets/hangchuy.mp3"),
+        { shouldPlay: true }
+      );
+      await sound.playAsync();
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.didJustFinish) sound.unloadAsync();
+      });
+    } catch (error) {
+      console.error("Error playing warning:", error);
+    }
+  };
+
   const handleBarCodeScanned = async ({ data }) => {
-    console.log("handleBarCodeScanned trigger");
     if (scanned) return;
     setScanned(true);
+
+    // Kiểm tra lại apiHealthy khi quét
+    if (apiHealthy === false) {
+      setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
+      setScanned(false);
+      return;
+    }
+
     const alertArr = alertText
       ?.toLowerCase()
       ?.split(",")
       .map((item) => item.toLowerCase().trim())
       .map((item) => item.split(" x ")[0])
       .filter((item) => item.length > 0);
+
+    setScanData((prevData) => {
+      let newData = [...prevData];
+      if (newData.length > 0 && newData[0]?.value === data) {
+        newData[0].count += 1;
+      } else {
+        newData.unshift({ value: data, count: 1 });
+      }
+      return newData;
+    });
     const isAlert =
       alertArr.includes(data.toLowerCase()) ||
       alertArr.includes(`${data}a`.toLowerCase());
 
     Vibration.vibrate(200);
     isAlert ? playWarning() : playBeep();
-
-    setScanData((prevData) => {
-      let newData = [...prevData];
-      if (newData.length > 0 && newData[newData.length - 1]?.value === data) {
-        newData[newData.length - 1].count += 1;
-      } else {
-        newData.push({ value: data, count: 1 });
-      }
-      return newData;
-    });
-
     console.log(
       "🚀 ~ setScanData ~ calling api product with productName:",
       data
     );
-    // Gọi API nếu có domain
+    let isHangChuY = false;
     if (apiDomain) {
       try {
         const response = await axios.get(
           `${apiDomain}/api/product?productName=${data}`,
           {
-            headers: { authorization: "kietdeptraizzz" },
+            headers: { authorization: apiKey, branch: branch },
           }
         );
-        // console.log(
-        //   "🚀 ~ handleBarCodeScanned ~ response.data:",
-        //   response.data
-        // );
+        if (response.data.base64 && !isValidBase64Image(response.data.base64)) {
+          response.data.base64 = "";
+        }
+        isHangChuY = response.data.isWarning;
+        if (isHangChuY) {
+          playHangChuY();
+        }
         setApiResponse(response.data);
         setApiResponseModalVisible(true);
         setScanned(false);
 
-        // Làm mới thời gian chờ 3s
         const timeoutId = setTimeout(() => {
           if (!scanned) setApiResponseModalVisible(false);
         }, 3000);
-        // Làm sạch timeout nếu quét mã mới
         return () => clearTimeout(timeoutId);
       } catch (error) {
         setScanned(false);
@@ -190,9 +244,23 @@ export default function App() {
     }
 
     setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
       setScanned(false);
     }, 500);
+  };
+
+  const isValidBase64Image = (base64String) => {
+    if (!base64String) return false;
+    try {
+      const base64Data = base64String.replace(
+        /^data:image\/[a-zA-Z+]+;base64,/,
+        ""
+      );
+      atob(base64Data);
+      return true;
+    } catch (e) {
+      return false;
+    }
   };
 
   const removeItem = (index) => {
@@ -207,7 +275,8 @@ export default function App() {
     });
   };
 
-  const copyToClipboard = () => {
+  const copyToClipboard = async () => {
+    if (apiHealthy === false) return;
     const textToCopy = scanData
       .map((item) =>
         item.count > 1 ? `${item.value} x ${item.count}` : item.value
@@ -215,11 +284,42 @@ export default function App() {
       .join(", ");
     Clipboard.setStringAsync(textToCopy);
     alert("Copied to clipboard!");
+    try {
+      const response = await axios.post(
+        `${apiDomain}/api/copy-scan-result`,
+        { items: scanData },
+        {
+          headers: { authorization: apiKey, branch: branch },
+        }
+      );
+      console.log("🚀 ~ copyToClipboard ~ response:", response);
+    } catch (error) {
+      console.log("🚀 ~ copyToClipboard ~ error:", error);
+    }
   };
 
-  const saveApiDomain = async () => {
+  const saveApiConfig = async () => {
     await AsyncStorage.setItem("apiDomain", apiDomain);
-    setApiConfigModalVisible(false); // Tắt modal sau khi lưu
+    await AsyncStorage.setItem("branch", branch);
+    await AsyncStorage.setItem("apiKey", apiKey);
+    setApiConfigModalVisible(false);
+    // Kiểm tra lại API sau khi lưu config
+    const checkApiHealth = async () => {
+      if (apiDomain && branch && apiKey) {
+        try {
+          const response = await axios.get(`${apiDomain}/api/health`, {
+            headers: { authorization: apiKey, branch: branch },
+          });
+          console.log("🚀 ~ checkApiHealth ~ response.data:", response.data);
+          setApiHealthy(response.status === 200);
+        } catch (error) {
+          console.log("🚀 ~ checkApiHealth ~ error:", error);
+          console.error("API /health failed:", error);
+          setApiHealthy(false);
+        }
+      }
+    };
+    await checkApiHealth();
   };
 
   if (!permission || !permission.granted) {
@@ -228,6 +328,41 @@ export default function App() {
 
   return (
     <View style={styles.container}>
+      <Modal
+        visible={healthIssueModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setHealthIssueModalVisible(false)} // Cho phép tắt modal
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={{ fontWeight: "bold", textAlign: "center" }}>
+              Lỗi kết nối API!
+            </Text>
+            <Text style={{ textAlign: "center", marginVertical: 10 }}>
+              API /health không phản hồi. Vui lòng kiểm tra cấu hình API.
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setApiConfigModalVisible(true);
+              }}
+              style={styles.copyButton}
+            >
+              <Text style={styles.copyText}>Cấu hình lại API</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setHealthIssueModalVisible(false)}
+              style={[
+                styles.copyButton,
+                { backgroundColor: "#ff4444", marginTop: 10 },
+              ]}
+            >
+              <Text style={styles.copyText}>Đóng</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <View style={styles.cameraContainer}>
         <CameraView
           style={styles.camera}
@@ -248,7 +383,7 @@ export default function App() {
       >
         <ScrollView ref={scrollViewRef} style={styles.scrollView}>
           {scanData.map((item, index) => {
-            const isLatest = index === scanData.length - 1;
+            const isLatest = index === 0;
             return (
               <Animated.View
                 key={index}
@@ -266,7 +401,7 @@ export default function App() {
                       },
                   ]}
                 >
-                  {item.value}
+                  {isLatest ? `VỪA QUÉT ${item.value}` : item.value}
                   {item.count > 1 && (
                     <Text style={styles.countText}> x {item.count}</Text>
                   )}
@@ -287,6 +422,14 @@ export default function App() {
             );
           })}
         </ScrollView>
+      </Animated.View>
+      <Animated.View
+        style={[
+          styles.scanCountContainer,
+          isFlipped && { transform: [{ rotate: "180deg" }] },
+        ]}
+      >
+        <Text style={styles.scanCountText}>SL mã quét: {totalScanned}</Text>
       </Animated.View>
       <View style={styles.buttonContainer}>
         <TouchableOpacity
@@ -359,7 +502,25 @@ export default function App() {
               onChangeText={setApiDomain}
               placeholder="Nhập domain API"
             />
-            <TouchableOpacity onPress={saveApiDomain} style={styles.copyButton}>
+            <Text style={{ fontWeight: "bold", marginBottom: 10 }}>
+              Nhập chi nhánh
+            </Text>
+            <TextInput
+              style={styles.textArea}
+              value={branch}
+              onChangeText={setBranch}
+              placeholder="Nhập chi nhánh"
+            />
+            <Text style={{ fontWeight: "bold", marginBottom: 10 }}>
+              Nhập key
+            </Text>
+            <TextInput
+              style={styles.textArea}
+              value={apiKey}
+              onChangeText={setApiKey}
+              placeholder="Nhập api key"
+            />
+            <TouchableOpacity onPress={saveApiConfig} style={styles.copyButton}>
               <Text style={styles.copyText}>OK</Text>
             </TouchableOpacity>
           </Animated.View>
@@ -381,17 +542,41 @@ export default function App() {
           >
             {apiResponse && (
               <>
-                <Image
-                  source={{
-                    uri: apiResponse.base64,
-                  }}
-                  style={styles.responseImage}
-                  resizeMode="contain"
-                />
+                {apiResponse.base64 &&
+                isValidBase64Image(apiResponse.base64) ? (
+                  <Image
+                    source={{
+                      uri: apiResponse.base64,
+                    }}
+                    style={styles.responseImage}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View style={styles.placeholderImage}>
+                    <Text style={styles.placeholderText}>
+                      Không hiển thị được hình
+                    </Text>
+                  </View>
+                )}
                 <Text style={styles.responseText}>
                   {apiResponse.productName || "Unknown Product"} - Giá:{" "}
-                  {formatVND(apiResponse.price)}
+                  {formatVND(apiResponse.price) || "N/A"}
                 </Text>
+                {apiResponse.linkPostFB && (
+                  <TouchableOpacity
+                    style={styles.linkButton}
+                    onPress={() =>
+                      Linking.openURL(
+                        apiResponse.linkPostFB // Thay bằng ID page Facebook thực tế
+                      )
+                    }
+                  >
+                    <Text style={styles.linkText}>Xem trên FB</Text>
+                  </TouchableOpacity>
+                )}
+                {apiResponse.error && (
+                  <Text style={styles.errorText}>{apiResponse.error}</Text>
+                )}
               </>
             )}
           </Animated.View>
@@ -458,26 +643,62 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 10,
     width: "90%",
-    height: 300, // Kích thước cố định để kiểm soát tỷ lệ
+    height: 300,
   },
   responseImage: {
-    height: "90%", // 90% cho hình ảnh
+    height: "90%",
     width: "100%",
   },
   responseText: {
-    height: "10%", // 10% cho tên sản phẩm
+    height: "10%",
     textAlign: "center",
     fontSize: 16,
     fontWeight: "bold",
     marginTop: 5,
   },
+  placeholderImage: {
+    height: "90%",
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f0f0f0",
+  },
+  placeholderText: {
+    color: "#888",
+    fontSize: 16,
+    fontStyle: "italic",
+  },
+  errorText: {
+    color: "red",
+    textAlign: "center",
+    fontSize: 14,
+    marginTop: 5,
+  },
   textArea: {
-    height: 150,
+    height: 50,
     borderColor: "#ccc",
     borderWidth: 1,
     borderRadius: 5,
     padding: 10,
     textAlignVertical: "top",
     marginBottom: 20,
+  },
+  scanCountContainer: {
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: "#f0f0f0",
+  },
+  scanCountText: {
+    fontSize: 18,
+    color: "#333",
+  },
+  linkButton: {
+    color: "white",
+    fontWeight: "bold",
+    padding: 20,
+    backgroundColor: "#3b5998",
+    borderRadius: 5,
+    marginTop: 5,
+    alignSelf: "center",
   },
 });
