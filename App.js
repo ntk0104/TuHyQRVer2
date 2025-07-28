@@ -43,7 +43,7 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [scanData, setScanData] = useState([]);
-  const [isFlipped, setIsFlipped] = useState(true);
+  const [isFlipped, setIsFlipped] = useState(false);
   const [healthIssueModalVisible, setHealthIssueModalVisible] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [alertText, setAlertText] = useState("");
@@ -173,80 +173,91 @@ export default function App() {
   const handleBarCodeScanned = async ({ data }) => {
     if (scanned) return;
     setScanned(true);
+    try {
+      const response = await axios.get(`${apiDomain}/api/health`, {
+        headers: { authorization: apiKey, branch: branch },
+      });
+      if (response.status === 200) {
+        setApiHealthy(response.status === 200);
+        const alertArr = alertText
+          ?.toLowerCase()
+          ?.split(",")
+          .map((item) => item.toLowerCase().trim())
+          .map((item) => item.split(" x ")[0])
+          .filter((item) => item.length > 0);
 
-    // Kiểm tra lại apiHealthy khi quét
-    if (apiHealthy === false) {
+        setScanData((prevData) => {
+          let newData = [...prevData];
+          if (newData.length > 0 && newData[0]?.value === data) {
+            newData[0].count += 1;
+          } else {
+            newData.unshift({ value: data, count: 1 });
+          }
+          return newData;
+        });
+        const isAlert =
+          alertArr.includes(data.toLowerCase()) ||
+          alertArr.includes(`${data}a`.toLowerCase());
+
+        Vibration.vibrate(200);
+        isAlert ? playWarning() : playBeep();
+        console.log(
+          "🚀 ~ setScanData ~ calling api product with productName:",
+          data
+        );
+        let isHangChuY = false;
+        if (apiDomain) {
+          try {
+            const response = await axios.get(
+              `${apiDomain}/api/product?productName=${data}`,
+              {
+                headers: { authorization: apiKey, branch: branch },
+              }
+            );
+            if (
+              response.data.base64 &&
+              !isValidBase64Image(response.data.base64)
+            ) {
+              response.data.base64 = "";
+            }
+            isHangChuY = response.data.isWarning;
+            if (isHangChuY) {
+              playHangChuY();
+            }
+            setApiResponse(response.data);
+            setApiResponseModalVisible(true);
+            setScanned(false);
+
+            const timeoutId = setTimeout(() => {
+              if (!scanned) setApiResponseModalVisible(false);
+            }, 3000);
+            return () => clearTimeout(timeoutId);
+          } catch (error) {
+            setScanned(false);
+            console.error("Lỗi rồi, báo admin");
+            setApiResponse({ error: "Lỗi rồi, báo admin" });
+            setApiResponseModalVisible(true);
+            const timeoutId = setTimeout(() => {
+              if (!scanned) setApiResponseModalVisible(false);
+            }, 3000);
+            return () => clearTimeout(timeoutId);
+          }
+        }
+
+        setTimeout(() => {
+          scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+          setScanned(false);
+        }, 500);
+      } else {
+        setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
+        setScanned(false);
+        return;
+      }
+    } catch (error) {
       setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
       setScanned(false);
       return;
     }
-
-    const alertArr = alertText
-      ?.toLowerCase()
-      ?.split(",")
-      .map((item) => item.toLowerCase().trim())
-      .map((item) => item.split(" x ")[0])
-      .filter((item) => item.length > 0);
-
-    setScanData((prevData) => {
-      let newData = [...prevData];
-      if (newData.length > 0 && newData[0]?.value === data) {
-        newData[0].count += 1;
-      } else {
-        newData.unshift({ value: data, count: 1 });
-      }
-      return newData;
-    });
-    const isAlert =
-      alertArr.includes(data.toLowerCase()) ||
-      alertArr.includes(`${data}a`.toLowerCase());
-
-    Vibration.vibrate(200);
-    isAlert ? playWarning() : playBeep();
-    console.log(
-      "🚀 ~ setScanData ~ calling api product with productName:",
-      data
-    );
-    let isHangChuY = false;
-    if (apiDomain) {
-      try {
-        const response = await axios.get(
-          `${apiDomain}/api/product?productName=${data}`,
-          {
-            headers: { authorization: apiKey, branch: branch },
-          }
-        );
-        if (response.data.base64 && !isValidBase64Image(response.data.base64)) {
-          response.data.base64 = "";
-        }
-        isHangChuY = response.data.isWarning;
-        if (isHangChuY) {
-          playHangChuY();
-        }
-        setApiResponse(response.data);
-        setApiResponseModalVisible(true);
-        setScanned(false);
-
-        const timeoutId = setTimeout(() => {
-          if (!scanned) setApiResponseModalVisible(false);
-        }, 3000);
-        return () => clearTimeout(timeoutId);
-      } catch (error) {
-        setScanned(false);
-        console.error("Lỗi rồi, báo admin");
-        setApiResponse({ error: "Lỗi rồi, báo admin" });
-        setApiResponseModalVisible(true);
-        const timeoutId = setTimeout(() => {
-          if (!scanned) setApiResponseModalVisible(false);
-        }, 3000);
-        return () => clearTimeout(timeoutId);
-      }
-    }
-
-    setTimeout(() => {
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-      setScanned(false);
-    }, 500);
   };
 
   const isValidBase64Image = (base64String) => {
