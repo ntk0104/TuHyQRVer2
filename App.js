@@ -53,7 +53,6 @@ export default function App() {
   const [apiConfigModalVisible, setApiConfigModalVisible] = useState(false);
   const [apiResponseModalVisible, setApiResponseModalVisible] = useState(false);
   const [apiResponse, setApiResponse] = useState(null);
-  const [apiHealthy, setApiHealthy] = useState(null); // null khi chưa kiểm tra
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const translateYAnim = useRef(new Animated.Value(10)).current;
   const scrollViewRef = useRef(null);
@@ -82,13 +81,11 @@ export default function App() {
           const response = await axios.get(`${apiDomain}/api/health`, {
             headers: { authorization: apiKey, branch: branch },
           });
-          setApiHealthy(response.status === 200);
         } catch (error) {
-          console.error("API /health failed:", error);
-          setApiHealthy(false);
+          setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
         }
       } else {
-        setApiHealthy(false);
+        setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
       }
     };
     checkApiHealth();
@@ -178,7 +175,6 @@ export default function App() {
         headers: { authorization: apiKey, branch: branch },
       });
       if (response.status === 200) {
-        setApiHealthy(response.status === 200);
         const alertArr = alertText
           ?.toLowerCase()
           ?.split(",")
@@ -287,13 +283,11 @@ export default function App() {
   };
 
   const copyToClipboard = async () => {
-    if (apiHealthy === false) return;
     try {
       const response = await axios.get(`${apiDomain}/api/health`, {
         headers: { authorization: apiKey, branch: branch },
       });
       if (response.status === 200) {
-        setApiHealthy(response.status === 200);
         const textToCopy = scanData
           .map((item) =>
             item.count > 1 ? `${item.value} x ${item.count}` : item.value
@@ -334,11 +328,9 @@ export default function App() {
             headers: { authorization: apiKey, branch: branch },
           });
           console.log("🚀 ~ checkApiHealth ~ response.data:", response.data);
-          setApiHealthy(response.status === 200);
         } catch (error) {
           console.log("🚀 ~ checkApiHealth ~ error:", error);
           console.error("API /health failed:", error);
-          setApiHealthy(false);
         }
       }
     };
