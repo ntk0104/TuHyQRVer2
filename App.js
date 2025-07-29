@@ -288,24 +288,36 @@ export default function App() {
 
   const copyToClipboard = async () => {
     if (apiHealthy === false) return;
-    const textToCopy = scanData
-      .map((item) =>
-        item.count > 1 ? `${item.value} x ${item.count}` : item.value
-      )
-      .join(", ");
-    Clipboard.setStringAsync(textToCopy);
-    alert("Copied to clipboard!");
     try {
-      const response = await axios.post(
-        `${apiDomain}/api/copy-scan-result`,
-        { items: scanData },
-        {
-          headers: { authorization: apiKey, branch: branch },
-        }
-      );
-      console.log("🚀 ~ copyToClipboard ~ response:", response);
+      const response = await axios.get(`${apiDomain}/api/health`, {
+        headers: { authorization: apiKey, branch: branch },
+      });
+      if (response.status === 200) {
+        setApiHealthy(response.status === 200);
+        const textToCopy = scanData
+          .map((item) =>
+            item.count > 1 ? `${item.value} x ${item.count}` : item.value
+          )
+          .join(", ");
+        Clipboard.setStringAsync(textToCopy);
+        alert("Copied to clipboard!");
+        const response = await axios.post(
+          `${apiDomain}/api/copy-scan-result`,
+          { items: scanData },
+          {
+            headers: { authorization: apiKey, branch: branch },
+          }
+        );
+        console.log("🚀 ~ copyToClipboard ~ response:", response);
+      } else {
+        setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
+        setScanned(false);
+        return;
+      }
     } catch (error) {
-      console.log("🚀 ~ copyToClipboard ~ error:", error);
+      setHealthIssueModalVisible(true); // Hiển thị lại modal nếu API không khỏe
+      setScanned(false);
+      return;
     }
   };
 
